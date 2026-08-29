@@ -1,3 +1,8 @@
+# Имя проекта задано явно. Без него docker compose выводит имя из названия
+# каталога, а каталог называется «ufc predict» — с пробелом. Пробел в имени
+# проекта превращает имена томов и сети в нечто, что неудобно набирать руками.
+name: ufc-predict
+
 services:
   nginx:
     image: nginx:1.27-alpine
@@ -10,6 +15,13 @@ services:
       - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
       - php
+    healthcheck:
+      # wget есть в alpine всегда; curl — нет.
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost/up"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
     restart: unless-stopped
 
   php:
@@ -20,7 +32,11 @@ services:
     volumes:
       - ./backend:/var/www/backend:cached
     env_file:
-      - ./backend/.env
+      # required: false — потому что backend/.env создаётся командой `make setup`
+      # и в репозиторий не входит. Без этого флага `docker compose config`
+      # падает на чистом клоне ещё до того, как вы успеете что-либо настроить.
+      - path: ./backend/.env
+        required: false
     environment:
       # Xdebug 3 читает XDEBUG_MODE в обход ini-файла. По умолчанию off —
       # включайте командой `make debug-on` или задайте XDEBUG_MODE=debug
@@ -46,11 +62,14 @@ services:
     volumes:
       - ./backend:/var/www/backend:cached
     env_file:
-      - ./backend/.env
+      - path: ./backend/.env
+        required: false
     depends_on:
       mysql:
         condition: service_healthy
-    # Планировщик Laravel: раз в минуту проверяет расписание из routes/console.php
+    # Планировщик Laravel: раз в минуту проверяет расписание из routes/console.php.
+    # На этапе 0 расписание пустое — контейнер существует, чтобы его наличие
+    # проверялось с самого начала, а не выяснялось на этапе 10.
     command: php artisan schedule:work
     restart: unless-stopped
 
@@ -60,9 +79,14 @@ services:
     ports:
       # Слева — порт на вашей машине (для PhpStorm, TablePlus, mysql-клиента),
       # справа — порт внутри docker-сети (его использует бекенд).
-      # Если 3306 уже занят локально установленным MySQL, задайте другой:
-      #   DB_PORT_EXTERNAL=33061 docker compose up -d
-      - "${DB_PORT_EXTERNAL:-3306}:3306"
+      #
+      # Умолчание 33061, а не 3306. Это не произвол: 3306 обычно занят локально
+      # установленным MySQL, а подключение в PhpStorm настраивалось и работало
+      # именно на 33061. Смена этого умолчания под работающей системой уже
+      # однажды сломала настроенное подключение — дефект №6 в docs/roadmap-v2.md.
+      # Фактическое значение пишется явным числом в корневой .env командой
+      # `make setup` и после этого не меняется никогда.
+      - "${DB_PORT_EXTERNAL:-33061}:3306"
     environment:
       MYSQL_DATABASE: ${DB_DATABASE:-ufc_predict}
       MYSQL_USER: ${DB_USERNAME:-ufc}
@@ -76,6 +100,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 12
+      start_period: 30s
     restart: unless-stopped
 
   node:
@@ -86,9 +111,10 @@ services:
       - ./frontend:/var/www/frontend:cached
     ports:
       - "${VITE_PORT:-5173}:5173"
-    # По умолчанию контейнер собирает фронтенд и завершается.
+    # npm ci, а не npm install: сборка обязана повторять package-lock.json
+    # байт в байт, иначе локальная сборка и сборка в CI расходятся молча.
     # Для разработки: docker compose run --rm --service-ports node npm run dev -- --host
-    command: sh -c "npm install && npm run build"
+    command: sh -c "npm ci && npm run build"
     profiles: ["build", "dev"]
 
 volumes:

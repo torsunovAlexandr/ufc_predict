@@ -1,21 +1,24 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Database\Seeders;
 
-use App\Services\Betting\BankrollService;
 use Illuminate\Database\Seeder;
 
-class DatabaseSeeder extends Seeder
+/**
+ * Пусто намеренно.
+ *
+ * На этапе 0 предметных таблиц нет, наполнять нечего. Класс оставлен, потому что
+ * entrypoint контейнера вызывает `db:seed` при первом запуске, и отсутствие
+ * файла превратило бы штатный запуск в ошибку.
+ *
+ * Стартовые данные появятся на этапе 2 вместе со схемой.
+ */
+final class DatabaseSeeder extends Seeder
 {
     public function run(): void
     {
-        // Стартовый банкролл
-        app(BankrollService::class)->initialise();
-
-        // Демонстрационные данные — чтобы интерфейс был живым
-        // до первой успешной загрузки с ufc.com
-        if (config('app.env') !== 'production' || env('SEED_DEMO_DATA', true)) {
-            $this->call(DemoDataSeeder::class);
-        }
+        //
     }
 }

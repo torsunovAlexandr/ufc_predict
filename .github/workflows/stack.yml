@@ -1,0 +1,148 @@
+name: stack
+
+# Главная сборка этапа 0.
+#
+# Она поднимает всю систему с нуля на чистой машине — так же, как это делает
+# `make setup` на вашем компьютере, — и проверяет то, что раньше выяснялось
+# только вручную и с опозданием:
+#
+#   дефект №2  MySQL 8.4 падает на удалённой переменной конфигурации
+#   дефект №8  make debug-on не пересобирал образ, Xdebug не появлялся
+#   дефект №9  entrypoint печатал лишнее, и PhpStorm не определял интерпретер
+#
+# Если эта сборка зелёная — «у меня не запускается» перестаёт быть возможным
+# ответом на вопрос «оно работает?».
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: stack-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  stack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      # Порты берём те же, что записывает `make setup` в корневой .env.
+      APP_PORT: '8080'
+      DB_PORT_EXTERNAL: '33061'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Создать .env так же, как это делает make setup
+        run: |
+          make env
+          echo "--- корневой .env ---"
+          sed 's/\(PASSWORD=\).*/\1***/' .env
+
+      - name: Собрать образы
+        run: docker compose build
+
+      - name: Собрать фронтенд контейнером node
+        run: docker compose --profile build run --rm node
+
+      - name: Поднять всё
+        run: docker compose up -d
+
+      - name: Дождаться, пока приложение ответит
+        run: |
+          for i in $(seq 1 90); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${APP_PORT}/up" || echo 000)
+            if [ "$code" = "200" ]; then
+              echo "Приложение ответило 200 на попытке $i"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::Приложение не ответило 200 от /up за отведённое время"
+          docker compose ps
+          docker compose logs --tail=100
+          exit 1
+
+      - name: MySQL стал healthy (дефект №2)
+        run: |
+          status=$(docker inspect -f '{{.State.Health.Status}}' ufc-mysql)
+          echo "Состояние ufc-mysql: $status"
+          if [ "$status" != "healthy" ]; then
+            echo "::error::Контейнер MySQL не healthy. Обычная причина — переменная, удалённая в MySQL 8.4, в docker/mysql/my.cnf."
+            docker compose logs mysql --tail=100
+            exit 1
+          fi
+          if docker compose logs mysql 2>&1 | grep -q 'unknown variable'; then
+            echo "::error::В логах MySQL есть «unknown variable» — это дефект №2."
+            docker compose logs mysql | grep 'unknown variable'
+            exit 1
+          fi
+
+      - name: Миграции накатились
+        run: |
+          docker compose exec -T php php artisan migrate --force
+          docker compose exec -T php php artisan migrate:status
+
+      - name: /api/health отдаёт database true
+        run: |
+          body=$(curl -s "http://localhost:${APP_PORT}/api/health")
+          echo "$body"
+          echo "$body" | grep -q '"database":true' || {
+            echo "::error::В ответе /api/health нет \"database\":true"
+            docker compose logs php --tail=100
+            exit 1
+          }
+
+      - name: Вывод `php -v` чистый (дефект №9)
+        run: |
+          first=$(docker compose exec -T php php -v | head -n1)
+          echo "Первая строка: $first"
+          case "$first" in
+            "PHP 8.4"*) echo "Вывод чистый и версия та, что заявлена" ;;
+            *)
+              echo "::error::Первая строка вывода php -v — «$first». Ожидалось «PHP 8.4…». Посторонний текст перед версией ломает определение интерпретера в PhpStorm."
+              exit 1
+              ;;
+          esac
+
+      - name: Тесты бекенда внутри контейнера
+        run: docker compose exec -T php vendor/bin/phpunit --testdox
+
+      - name: make doctor
+        run: make doctor
+
+      - name: Xdebug включается и выключается (дефект №8)
+        run: |
+          make debug-on
+          docker compose exec -T php php -r 'exit(ini_get("xdebug.mode") === "debug" ? 0 : 1);' || {
+            echo "::error::После make debug-on режим Xdebug не стал debug"
+            exit 1
+          }
+          make debug-off
+          docker compose exec -T php php -m | grep -qi '^xdebug$' || {
+            echo "::error::После make debug-off расширение Xdebug пропало из образа. Оно обязано присутствовать всегда и управляться только переменной XDEBUG_MODE."
+            exit 1
+          }
+
+      - name: Повторный make setup не портит настроенный .env (дефект №7)
+        run: |
+          sed -i 's/^APP_PORT=.*/APP_PORT=8081/' .env
+          echo "MY_MANUAL_KEY=не трогать" >> .env
+          make env
+          grep -q '^APP_PORT=8081$' .env || { echo "::error::make env перезаписал APP_PORT"; exit 1; }
+          grep -q '^MY_MANUAL_KEY=не трогать$' .env || { echo "::error::make env стёр ручную строку"; exit 1; }
+          test "$(grep -c '^APP_PORT=' .env)" = "1" || { echo "::error::make env продублировал ключ"; exit 1; }
+          echo "Ручные правки на месте, дубликатов нет"
+
+      - name: Логи, если что-то упало
+        if: failure()
+        run: |
+          docker compose ps
+          docker compose logs --tail=200
+
+      - name: Погасить
+        if: always()
+        run: docker compose down -v

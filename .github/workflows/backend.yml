@@ -1,0 +1,58 @@
+name: backend
+
+# Оформление, статический анализ и тесты бекенда. Без Docker и без MySQL:
+# всё, что здесь проверяется, обязано проверяться за полминуты на любой машине.
+# Тесты идут на SQLite в памяти — см. backend/phpunit.xml.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: backend-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: backend
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Поставить PHP 8.4
+        uses: shivammathur/setup-php@v2
+        with:
+          # Та же версия, что в docker/php/Dockerfile. Если они разойдутся,
+          # это заметит tests/Unit/SmokeTest.php, а не пользователь.
+          php-version: '8.4'
+          extensions: pdo, pdo_sqlite, pdo_mysql, mbstring, intl, bcmath, zip, dom, curl
+          coverage: none
+          tools: composer:v2
+
+      - name: Кэш composer
+        uses: actions/cache@v4
+        with:
+          path: backend/vendor
+          key: composer-${{ runner.os }}-php8.4-${{ hashFiles('backend/composer.lock') }}
+          restore-keys: composer-${{ runner.os }}-php8.4-
+
+      - name: Установить зависимости
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Проверить, что composer.lock не разошёлся с composer.json
+        run: composer validate --strict --no-check-publish
+
+      - name: Оформление кода (Pint)
+        run: vendor/bin/pint --test
+
+      - name: Статический анализ (PHPStan + Larastan)
+        run: vendor/bin/phpstan analyse --memory-limit=512M --no-progress
+
+      - name: Тесты
+        run: vendor/bin/phpunit --testdox
