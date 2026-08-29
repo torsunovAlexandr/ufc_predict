@@ -113,7 +113,7 @@ Domain не знает ни о Laravel, ни о базе, ни о HTTP. Это �
 
 ```bash
 make check     # Pint + PHPStan + PHPUnit — то же, что гоняет сборка backend
-make doctor    # семь проверок живой системы
+make doctor    # восемь проверок живой системы
 ```
 
 Сборку `stack` целиком воспроизвести без Docker нельзя — она проверяется
