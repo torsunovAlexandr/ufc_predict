@@ -1,6 +1,10 @@
 # Этап 0. Каркас и конвейер проверок
 
-Статус: **ТЗ согласовано, реализация не начата.**
+Статус: **реализовано, ждёт проверки на машине ALEX.**
+Ветка `stage-0`, коммит `39a41ba`. Локально проверено: Pint, PHPStan (уровень 6),
+PHPUnit (7 тестов, 25 утверждений), `npm ci` + `npm run build`, идемпотентность
+генератора `.env`. Сборка `stack` проверяется только в GitHub Actions —
+доступа к docker-демону из среды Cowork нет.
 Источник этапов — `docs/roadmap-v2.md`, часть 5. Требования к продукту — `docs/requirements.md`.
 
 **Цель этапа:** получить возможность выполнять и проверять код. Ни одной строки
@@ -37,7 +41,7 @@ ufc predict/
 │   ├── frontend.yml         сборка фронтенда
 │   ├── stack.yml            подъём всего Compose и проверка /up
 │   └── contract.yml         живые контракты по расписанию (заглушка до этапа 3)
-├── .claude/skills/          знания о проекте для будущих сессий (переписываются)
+├── .claude/skills/          предметные знания; не трогаются до этапов 3–4
 ├── backend/                 создаётся заново из скелета Laravel 13
 │   ├── app/                 пусто, кроме Http/Controllers/HealthController.php
 │   ├── config/
@@ -46,6 +50,7 @@ ufc predict/
 │   ├── tests/
 │   │   └── Unit/SmokeTest.php  один тест, доказывающий, что тесты выполняются
 │   ├── composer.json
+│   ├── phpstan.neon
 │   └── .env.example
 ├── docker/                  переносится, правки ниже
 │   ├── php/{Dockerfile,php.ini,xdebug.ini,entrypoint.sh}
@@ -58,7 +63,10 @@ ufc predict/
 │   ├── phpstorm-xdebug.md   настройка отладки
 │   └── session-context.md   состояние работы для новой сессии
 ├── frontend/                переносится как есть
-├── tools/doctor.sh
+├── tools/
+│   ├── doctor.sh            семь проверок живой системы
+│   └── env-sync.sh          генератор .env, который только дописывает
+├── .env.example             образец корневого .env
 ├── docker-compose.yml
 ├── Makefile
 ├── AGENTS.md
