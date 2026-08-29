@@ -54,14 +54,26 @@ jobs:
       - name: Дождаться, пока приложение ответит
         run: |
           for i in $(seq 1 90); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${APP_PORT}/up" || echo 000)
+            code=$(curl -s -o /tmp/up.html -w '%{http_code}' "http://localhost:${APP_PORT}/up" || echo 000)
             if [ "$code" = "200" ]; then
               echo "Приложение ответило 200 на попытке $i"
               exit 0
             fi
             sleep 5
           done
-          echo "::error::Приложение не ответило 200 от /up за отведённое время"
+          echo "::error::Приложение не ответило 200 от /up за отведённое время (последний код $code)"
+          # Тело ответа важнее журналов: 500 от Laravel — это страница с текстом
+          # исключения, и без неё падение выглядит как «просто не отвечает».
+          {
+            echo '## /up не ответил 200'
+            echo
+            echo "Последний код ответа: **$code**"
+            echo
+            echo '### Текст ответа'
+            echo '```'
+            sed 's/<[^>]*>//g' /tmp/up.html | grep -v '^[[:space:]]*$' | head -60
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
           docker compose ps
           docker compose logs --tail=100
           exit 1

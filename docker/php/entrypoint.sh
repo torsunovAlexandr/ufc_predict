@@ -61,7 +61,17 @@ if ! grep -q '^APP_KEY=base64:' .env; then
     php artisan key:generate --force
 fi
 
-chmod -R ug+rw storage bootstrap/cache 2>/dev/null || true
+# Права на каталоги, в которые пишет приложение.
+#
+# php-fpm обслуживает запросы от имени www-data, а backend/ приходит из
+# bind-mount и на Linux сохраняет владельца с хост-машины. На macOS этого не
+# видно: Docker Desktop подменяет владельца файлов на того, кто обратился, и
+# запись проходит всегда. На Linux не проходит — Blade не может положить
+# скомпилированный шаблон в storage/framework/views, и /up отвечает 500,
+# хотя те же команды из-под root (контейнер планировщика) работают.
+# Поэтому владелец выставляется явно, а не только режим доступа.
+chown -R www-data:www-data storage bootstrap/cache 2>/dev/null || true
+chmod -R ug+rwX storage bootstrap/cache 2>/dev/null || true
 
 if [ "$ROLE" = "server" ]; then
     # Конфигурацию сбрасываем ДО обращения к базе: закэшированный config
@@ -101,5 +111,9 @@ if [ "$ROLE" = "server" ]; then
         fi
     fi
 fi
+
+# Ещё раз, последним действием: миграции и сидер выполнялись из-под root и
+# могли оставить в storage файлы, которые php-fpm потом не перезапишет.
+chown -R www-data:www-data storage bootstrap/cache 2>/dev/null || true
 
 exec "$@"
