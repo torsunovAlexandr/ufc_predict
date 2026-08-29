@@ -117,7 +117,9 @@ debug-check: ## Проверить, что Xdebug установлен и в к�
 		echo "  Xdebug НЕ установлен в образе — выполните: make rebuild"; \
 		exit 1; \
 	fi
-	@$(DC) exec -T php php -r 'echo "  xdebug.mode = ", ini_get("xdebug.mode") ?: "(не задан)", PHP_EOL;'
+	@# Действующий режим знает только xdebug_info("mode"); ini_get("xdebug.mode")
+	@# возвращает пустую строку и когда отладчик выключен, и когда включён.
+	@$(DC) exec -T php php -r '$$m = xdebug_info("mode"); echo "  Режим Xdebug: ", $$m ? implode(", ", $$m) : "выключен", PHP_EOL;'
 	@echo "  Порт 9003, IDE key PHPSTORM. Настройка: docs/phpstorm-xdebug.md"
 	@echo ""
 

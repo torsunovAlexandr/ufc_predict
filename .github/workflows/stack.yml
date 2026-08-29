@@ -128,14 +128,23 @@ jobs:
 
       - name: Xdebug включается и выключается (дефект №8)
         run: |
+          # Действующий режим спрашивается у xdebug_info("mode"), а не у
+          # ini_get("xdebug.mode"). ini_get возвращает пустую строку всегда:
+          # режим задан переменной окружения XDEBUG_MODE, а она идёт мимо
+          # ini-значения. Проверка на ini_get выглядит правдоподобно и не
+          # проверяет ничего — именно так дефект №8 и дожил до продакшена.
           make debug-on
-          docker compose exec -T php php -r 'exit(ini_get("xdebug.mode") === "debug" ? 0 : 1);' || {
-            echo "::error::После make debug-on режим Xdebug не стал debug"
+          docker compose exec -T php php -r 'exit(in_array("debug", xdebug_info("mode"), true) ? 0 : 1);' || {
+            echo "::error::После make debug-on отладчик не активен: xdebug_info(\"mode\") не содержит debug"
             exit 1
           }
           make debug-off
           docker compose exec -T php php -m | grep -qi '^xdebug$' || {
             echo "::error::После make debug-off расширение Xdebug пропало из образа. Оно обязано присутствовать всегда и управляться только переменной XDEBUG_MODE."
+            exit 1
+          }
+          docker compose exec -T php php -r 'exit(in_array("debug", xdebug_info("mode"), true) ? 1 : 0);' || {
+            echo "::error::После make debug-off отладчик остался активен"
             exit 1
           }
 
