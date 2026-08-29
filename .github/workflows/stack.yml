@@ -140,8 +140,22 @@ jobs:
       - name: Логи, если что-то упало
         if: failure()
         run: |
-          docker compose ps
-          docker compose logs --tail=200
+          # Диагностика пишется и в вывод шага, и в сводку прогона.
+          # Сводка видна прямо на странице прогона и доступна по API —
+          # чтобы разбирать падение, не выкачивая журнал целиком.
+          {
+            echo '## Диагностика упавшей сборки'
+            echo
+            echo '### docker compose ps'
+            echo '```'
+            docker compose ps 2>&1
+            echo '```'
+            echo
+            echo '### Последние строки журналов'
+            echo '```'
+            docker compose logs --tail=200 2>&1 | tail -c 40000
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Погасить
         if: always()
