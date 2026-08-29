@@ -1,19 +1,47 @@
 #!/bin/sh
 # Подготовка окружения при старте контейнера.
-# Основной контейнер (php-fpm) ставит зависимости и накатывает миграции,
-# контейнер планировщика просто дожидается, пока это сделает основной.
+#
+# ВАЖНО (дефект №9): подготовка выполняется только для долгоживущих ролей —
+# php-fpm и планировщика. Любая разовая команда (php -v, php -i, composer,
+# artisan) исполняется сразу и без единой лишней строки в выводе: этот вывод
+# разбирают IDE и скрипты. PhpStorm определяет версию PHP и наличие Xdebug,
+# читая вывод `php -v` в контейнере, и посторонний текст перед ним ломает
+# определение интерпретера.
+#
+# Правило проверяется автоматически: сборка `stack` требует, чтобы первая
+# строка `docker compose exec -T php php -v` начиналась ровно с «PHP ».
 set -e
 
 cd /var/www/backend
 
-ROLE="$1"
+case "$1" in
+    php-fpm)
+        ROLE=server
+        ;;
+    php)
+        # Планировщик запускается как `php artisan schedule:work`
+        if [ "$2" = "artisan" ] && [ "$3" = "schedule:work" ]; then
+            ROLE=scheduler
+        else
+            ROLE=cli
+        fi
+        ;;
+    *)
+        ROLE=cli
+        ;;
+esac
+
+# Разовые команды — молча и сразу
+if [ "$ROLE" = "cli" ]; then
+    exec "$@"
+fi
 
 if [ ! -f .env ]; then
     echo "→ Создаю .env из .env.example…"
     cp .env.example .env
 fi
 
-if [ "$ROLE" = "php-fpm" ]; then
+if [ "$ROLE" = "server" ]; then
     if [ ! -f vendor/autoload.php ]; then
         echo "→ Устанавливаю зависимости composer (первый запуск, это займёт пару минут)…"
         composer install --no-interaction --prefer-dist --optimize-autoloader
@@ -33,37 +61,59 @@ if ! grep -q '^APP_KEY=base64:' .env; then
     php artisan key:generate --force
 fi
 
-chmod -R ug+rw storage bootstrap/cache 2>/dev/null || true
+# Права на каталоги, в которые пишет приложение.
+#
+# php-fpm обслуживает запросы от имени www-data, а backend/ приходит из
+# bind-mount и на Linux сохраняет владельца с хост-машины. На macOS этого не
+# видно: Docker Desktop подменяет владельца файлов на того, кто обратился, и
+# запись проходит всегда. На Linux не проходит — Blade не может положить
+# скомпилированный шаблон в storage/framework/views, и /up отвечает 500,
+# хотя те же команды из-под root (контейнер планировщика) работают.
+# Поэтому владелец выставляется явно, а не только режим доступа.
+chown -R www-data:www-data storage bootstrap/cache 2>/dev/null || true
+chmod -R ug+rwX storage bootstrap/cache 2>/dev/null || true
 
-if [ "$ROLE" = "php-fpm" ]; then
-    echo "→ Жду MySQL…"
+if [ "$ROLE" = "server" ]; then
+    # Конфигурацию сбрасываем ДО обращения к базе: закэшированный config
+    # от предыдущего запуска может содержать старые параметры подключения.
+    php artisan config:clear >/dev/null 2>&1 || true
+
+    # Ждём базу самой миграцией, а не отдельной PDO-проверкой.
+    # Так параметры подключения берутся оттуда же, откуда их берёт приложение —
+    # из backend/.env через конфиг Laravel. Отдельная проверка на getenv()
+    # читала переменные окружения контейнера и врала, когда они не совпадали
+    # с .env.
+    echo "→ Жду MySQL и накатываю миграции…"
     i=0
-    until php -r '
-        $dsn = "mysql:host=".getenv("DB_HOST").";port=".(getenv("DB_PORT") ?: 3306);
-        new PDO($dsn, getenv("DB_USERNAME"), getenv("DB_PASSWORD"));
-    ' 2>/dev/null; do
+    until php artisan migrate --force --no-interaction >/tmp/migrate.log 2>&1; do
         i=$((i + 1))
         if [ "$i" -ge 40 ]; then
-            echo "  MySQL не ответил за отведённое время — продолжаю без миграций."
+            echo "  База не ответила за отведённое время. Последняя ошибка:"
+            tail -5 /tmp/migrate.log | sed 's/^/    /'
+            echo "  Выполните вручную: docker compose exec php php artisan migrate"
             break
         fi
         sleep 3
     done
+    if [ "$i" -lt 40 ]; then
+        sed 's/^/  /' /tmp/migrate.log
+    fi
 
-    echo "→ Накатываю миграции…"
-    php artisan migrate --force || echo "  Миграции не выполнены, выполните вручную: docker compose exec php php artisan migrate"
-
-    # Стартовые данные заливаем ровно один раз — по метке в storage
+    # Стартовые данные заливаем ровно один раз — по метке в storage.
+    # На этапе 0 сидер пустой; метка нужна, чтобы на этапе 2 повторный
+    # запуск контейнера не затирал ручные правки в базе.
     if [ ! -f storage/.seeded ]; then
         echo "→ Наполняю базу стартовыми данными…"
-        if php artisan db:seed --force; then
+        if php artisan db:seed --force --no-interaction; then
             touch storage/.seeded
         else
             echo "  Сид не выполнен, при необходимости запустите: docker compose exec php php artisan db:seed"
         fi
     fi
-
-    php artisan config:clear >/dev/null 2>&1 || true
 fi
+
+# Ещё раз, последним действием: миграции и сидер выполнялись из-под root и
+# могли оставить в storage файлы, которые php-fpm потом не перезапишет.
+chown -R www-data:www-data storage bootstrap/cache 2>/dev/null || true
 
 exec "$@"

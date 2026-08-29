@@ -1,19 +1,18 @@
 {
-    "name": "ufc/predict-backend",
+    "$schema": "https://getcomposer.org/schema.json",
+    "name": "torsunov/ufc-predict",
     "type": "project",
-    "description": "Система прогнозирования боёв UFC и виртуальных ставок — REST API",
-    "keywords": ["ufc", "mma", "prediction", "betting"],
-    "license": "MIT",
+    "description": "UFC Predict — бекенд. Этап 0: каркас без предметной логики.",
+    "license": "proprietary",
     "require": {
-        "php": "^8.3",
-        "guzzlehttp/guzzle": "^7.8",
+        "php": "^8.4",
         "laravel/framework": "^13.17",
-        "laravel/tinker": "^3.0",
-        "symfony/css-selector": "^7.4 || ^8.0",
-        "symfony/dom-crawler": "^7.4 || ^8.0"
+        "laravel/tinker": "^3.0"
     },
     "require-dev": {
-        "fakerphp/faker": "^1.23",
+        "larastan/larastan": "^3.10",
+        "laravel/pail": "^1.2.5",
+        "laravel/pint": "^1.27",
         "mockery/mockery": "^1.6",
         "nunomaduro/collision": "^8.6",
         "phpunit/phpunit": "^12.5.12"
@@ -31,6 +30,21 @@
         }
     },
     "scripts": {
+        "analyse": [
+            "@php vendor/bin/phpstan analyse --memory-limit=512M"
+        ],
+        "lint": [
+            "@php vendor/bin/pint --test"
+        ],
+        "test": [
+            "@php artisan config:clear --ansi",
+            "@php vendor/bin/phpunit"
+        ],
+        "check": [
+            "@lint",
+            "@analyse",
+            "@test"
+        ],
         "post-autoload-dump": [
             "Illuminate\\Foundation\\ComposerScripts::postAutoloadDump",
             "@php artisan package:discover --ansi"
@@ -38,11 +52,8 @@
         "post-update-cmd": [
             "@php artisan vendor:publish --tag=laravel-assets --ansi --force"
         ],
-        "post-root-package-install": [
-            "@php -r \"file_exists('.env') || copy('.env.example', '.env');\""
-        ],
-        "post-create-project-cmd": [
-            "@php artisan key:generate --ansi"
+        "pre-package-uninstall": [
+            "Illuminate\\Foundation\\ComposerScripts::prePackageUninstall"
         ]
     },
     "extra": {

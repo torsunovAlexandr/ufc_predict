@@ -8,32 +8,155 @@ Xdebug уже собран в образ (`docker/php/Dockerfile`), но по у
 
 ---
 
-## Шаг 0. Пересобрать образ
-
-Xdebug появился в проекте позже первой сборки, поэтому образ нужно пересобрать:
+## Шаг 0. Собрать образ с Xdebug
 
 ```bash
-docker compose build php
 make debug-on
 ```
 
-Проверить, что расширение на месте:
+Команда сама пересоберёт образ, если Xdebug в нём ещё нет, поднимет контейнеры
+и напечатает результат проверки. В выводе должна быть строка `with Xdebug v3.x.x`
+и `xdebug.mode = debug`.
+
+Проверить в любой момент:
 
 ```bash
-docker compose exec php php -v
+make debug-check
 ```
 
-В выводе должна быть строка `with Xdebug v3.x.x`. И проверить режим:
+Если написано «Xdebug НЕ установлен в образе» — значит сборка не прошла;
+посмотрите вывод `docker compose build php` целиком, там будет причина.
+
+**Про `--force-recreate` и сборку.** `docker compose up --force-recreate`
+пересоздаёт контейнеры из **существующего** образа и НЕ пересобирает его.
+Если менялся `Dockerfile`, нужен именно `docker compose build php` —
+раньше `make debug-on` этого не делал, и Xdebug не появлялся.
+
+---
+
+## Шаг 0.5. Если вместо Docker Desktop у вас OrbStack, Colima или Podman
+
+Симптом:
+
+```
+Cannot connect to the Docker daemon at unix:///var/run/docker.sock.
+Is the docker daemon running?
+```
+
+В терминале при этом всё работает. Причина в том, что PhpStorm — приложение
+с графическим интерфейсом: оно не наследует переменные окружения из вашего
+shell-профиля и не знает про `DOCKER_HOST` и docker-контексты. Оно идёт
+по жёсткому пути `/var/run/docker.sock`, которого у альтернативных рантаймов
+может не быть: OrbStack создаёт там символическую ссылку только если при
+установке получил права администратора.
+
+**Узнайте настоящий путь к сокету:**
 
 ```bash
-docker compose exec php php -i | grep 'xdebug.mode'
+docker context ls
+docker context inspect "$(docker context show)" --format '{{.Endpoints.docker.Host}}'
+ls -l /var/run/docker.sock          # есть ли ссылка и не битая ли она
 ```
 
-Должно быть `debug` после `make debug-on` и `off` после `make debug-off`.
+Типичные пути:
+
+| Рантайм | Сокет |
+|---|---|
+| OrbStack | `~/.orbstack/run/docker.sock` |
+| Colima | `~/.colima/default/docker.sock` |
+| Podman (macOS) | `~/.local/share/containers/podman/machine/podman.sock` |
+| Docker Desktop | `/var/run/docker.sock` |
+
+**Пропишите его в PhpStorm:**
+
+Settings → Build, Execution, Deployment → **Docker** → `+` → выберите
+**TCP socket** и в поле **Engine API URL** укажите путь с префиксом `unix://`
+и **абсолютным** путём (тильда не раскроется):
+
+```
+unix:///Users/<ваш-пользователь>/.orbstack/run/docker.sock
+```
+
+Несмотря на название «TCP socket», это поле принимает и unix-сокеты — так
+описано в [документации JetBrains](https://www.jetbrains.com/help/phpstorm/settings-docker.html).
+Внизу диалога должно появиться «Connection successful».
+
+После этого возвращайтесь к шагу 1: без рабочего подключения к Docker
+интерпретер из Docker Compose не создаётся вообще, и Xdebug определить не из чего.
+
+**Альтернатива для OrbStack:** восстановить стандартную ссылку, чтобы её видели
+все инструменты сразу. Она создаётся при установке с правами администратора —
+проще всего заново пройти настройку OrbStack и согласиться на запрос прав.
+Проверка: `ls -l /var/run/docker.sock` должен показывать ссылку
+на `~/.orbstack/run/docker.sock`.
+
+**Про `host.docker.internal`.** OrbStack поддерживает это имя, как и Docker
+Desktop, плюс в `docker-compose.yml` оно продублировано через `extra_hosts`.
+Если Xdebug не сможет достучаться до IDE, это первое, что стоит проверить —
+подробности в разделе «Если точка останова не срабатывает».
+
+---
+
+## Шаг 0.6. Ошибка «client version 1.24 is too old»
+
+```
+Status 400: client version 1.24 is too old.
+Minimum supported API version is 1.40, please upgrade your client
+```
+
+Подключение к демону уже работает — не сходятся версии Docker Engine API.
+Свежие версии движка (28-я подняла минимум до 1.40, 29-я до 1.44) больше
+не принимают старые клиенты, а Docker-клиент внутри JetBrains-IDE по-прежнему
+представляется версией 1.24. Это баг самой IDE, а не проекта:
+[IJPL-217878](https://youtrack.jetbrains.com/projects/IJPL/issues/IJPL-217878),
+на момент написания не закрыт.
+
+**Сначала — важное:** для пошаговой отладки Docker-интеграция в PhpStorm
+**не нужна вообще**. Xdebug сам соединяется с IDE по TCP 9003, а IDE только
+слушает порт и сопоставляет пути. Так что шаг 1 можно пропустить и сразу идти
+к шагам 2–5 — точки останова будут работать. Интерпретер из контейнера нужен
+лишь для запуска тестов из редактора и для подсказок по версии PHP.
+
+**Если интерпретер всё-таки нужен**, разрешите движку принимать старый клиент.
+В OrbStack конфигурация демона лежит в `~/.orbstack/config/docker.json`:
+
+```bash
+orb config docker          # откроет конфиг в редакторе
+```
+
+Добавьте ключ:
+
+```json
+{
+    "min-api-version": "1.24"
+}
+```
+
+Примените и проверьте:
+
+```bash
+orb restart docker
+docker version
+```
+
+Для Docker Desktop то же самое делается в Settings → Docker Engine, для Linux —
+в `/etc/docker/daemon.json` с последующим `systemctl restart docker`.
+
+Это ослабляет ограничение движка, введённое ради безопасности: снова
+разрешаются запросы по устаревшей версии API. На локальной машине для разработки
+это приемлемо, но держать такую настройку на сервере не стоит. Как только
+JetBrains закроют IJPL-217878 и вы обновите IDE — ключ можно убрать.
+
+Третий вариант, если менять конфигурацию движка не хочется: обновить PhpStorm
+до версии, где баг уже исправлен. Проверьте в трекере, в каком релизе он закрыт.
 
 ---
 
 ## Шаг 1. Интерпретер PHP из контейнера
+
+> Нужен для запуска тестов из редактора и подсказок по версии PHP.
+> **Для точек останова он не обязателен** — если Docker-интеграция капризничает,
+> переходите сразу к шагу 2.
 
 **Settings → PHP**
 
@@ -44,7 +167,22 @@ docker compose exec php php -i | grep 'xdebug.mode'
 5. OK. PhpStorm запустит контейнер и определит версию — в поле должно появиться
    что-то вроде `PHP 8.4.x, debugger: Xdebug 3.x.x`.
 
-Если отладчик не определился, значит образ собран без Xdebug — вернитесь к шагу 0.
+### Если PhpStorm не показывает Xdebug
+
+Поле должно выглядеть так: `PHP 8.4.x, debugger: Xdebug 3.x.x`. Если отладчика там нет:
+
+| Проверка | Как |
+|---|---|
+| Расширение вообще в образе | `make debug-check` — если его нет, дело не в IDE |
+| Образ пересобран после правки Dockerfile | `docker compose build php` (одного `up --force-recreate` мало) |
+| PhpStorm не закэшировал старое значение | в диалоге интерпретера нажмите ↻ рядом с полем версии |
+| PhpStorm подключён к тому же Docker | Settings → Build, Execution, Deployment → Docker, статус «Connected» |
+| Вывод контейнера чистый | `docker compose run --rm --no-deps php php -v` — перед строкой `PHP 8.4.x` не должно быть ничего лишнего |
+
+Последний пункт неочевиден, но ломал определение: PhpStorm разбирает вывод
+`php -v`, и если entrypoint печатал в него свои сообщения о подготовке окружения,
+IDE не находила ни версию, ни отладчик. Сейчас entrypoint выполняет разовые
+команды молча — подготовка идёт только для `php-fpm` и планировщика.
 
 ---
 

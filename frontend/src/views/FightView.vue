@@ -56,6 +56,46 @@ const factors = computed(() => {
 
 const methodMarkets = computed(() => prediction.value?.method_probabilities?.markets || null)
 
+/**
+ * Линии тотала раундов, посчитанные моделью. У трёхраундового боя это 1.5 и 2.5,
+ * у пятираундового — вплоть до 4.5, и именно 4.5 выставляют букмекеры
+ * на главные бои карда.
+ */
+const totalsLines = computed(() => {
+  const totals = prediction.value?.method_probabilities?.totals
+  if (!totals) return []
+
+  return Object.entries(totals)
+    .map(([line, value]) => ({ line, ...value }))
+    .sort((a, b) => Number(a.line) - Number(b.line))
+})
+
+/** Вероятность модели для конкретной котировки — используется в таблице коэффициентов. */
+function modelProbabilityFor(odd) {
+  const p = prediction.value
+  if (!p) return null
+
+  if (odd.market === 'moneyline') {
+    return odd.selection === 'fighter1' ? p.probability_fighter1 : p.probability_fighter2
+  }
+
+  if (odd.market === 'draw') return p.probability_draw
+
+  if (odd.market === 'totals') {
+    const key = Number(odd.line).toFixed(1)
+    const row = p.method_probabilities?.totals?.[key]
+    if (row) return row[odd.selection]
+    if (Number(odd.line) === 2.5) {
+      return odd.selection === 'over' ? p.probability_over_2_5 : p.probability_under_2_5
+    }
+    return null
+  }
+
+  if (odd.market === 'method') return methodMarkets.value?.[odd.selection] ?? null
+
+  return null
+}
+
 /** Котировки, сгруппированные по рынку: показываем лучшую цену. */
 const bestOdds = computed(() => {
   if (!fight.value?.odds) return []
@@ -264,13 +304,13 @@ onMounted(load)
                     <td>Решение судей</td>
                     <td class="num">{{ share(methodMarkets.decision) }}</td>
                   </tr>
-                  <tr>
+                  <tr v-for="total in totalsLines" :key="total.line">
+                    <td>Тотал раундов больше {{ total.line }}</td>
+                    <td class="num">{{ share(total.over) }}</td>
+                  </tr>
+                  <tr v-if="!totalsLines.length">
                     <td>Тотал раундов больше 2.5</td>
                     <td class="num">{{ share(prediction.probability_over_2_5) }}</td>
-                  </tr>
-                  <tr>
-                    <td>Тотал раундов меньше 2.5</td>
-                    <td class="num">{{ share(prediction.probability_under_2_5) }}</td>
                   </tr>
                 </tbody>
               </table>
@@ -367,22 +407,10 @@ onMounted(load)
                 <td class="num">{{ decimal(odd.price) }}</td>
                 <td class="num muted">{{ share(odd.implied_probability) }}</td>
                 <td class="num">
-                  <template v-if="prediction">
-                    {{
-                      share(
-                        odd.selection === 'fighter1'
-                          ? prediction.probability_fighter1
-                          : odd.selection === 'fighter2'
-                            ? prediction.probability_fighter2
-                            : odd.selection === 'over'
-                              ? prediction.probability_over_2_5
-                              : odd.selection === 'under'
-                                ? prediction.probability_under_2_5
-                                : methodMarkets?.[odd.selection]
-                      )
-                    }}
+                  <template v-if="prediction && modelProbabilityFor(odd) !== null">
+                    {{ share(modelProbabilityFor(odd)) }}
                   </template>
-                  <span v-else>—</span>
+                  <span v-else class="muted" title="Модель не оценивает этот рынок">—</span>
                 </td>
                 <td class="muted">{{ odd.bookmaker }}</td>
               </tr>

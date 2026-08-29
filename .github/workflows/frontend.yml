@@ -1,0 +1,54 @@
+name: frontend
+
+# Сборка фронтенда на чистом npm ci. Код фронтенда на этапе 0 не менялся —
+# проверяется ровно одно: package-lock.json описывает то, что действительно
+# собирается, и сборка проходит на машине, где нет ничьего node_modules.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: frontend-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: frontend
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Поставить Node 22
+        uses: actions/setup-node@v4
+        with:
+          # Та же мажорная версия, что у образа node в docker-compose.yml.
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Установить зависимости строго по package-lock.json
+        run: npm ci
+
+      - name: Собрать
+        run: npm run build
+
+      - name: Убедиться, что сборка действительно появилась
+        run: |
+          test -f dist/index.html || { echo "::error::dist/index.html не создан"; exit 1; }
+          echo "Размер сборки: $(du -sh dist | cut -f1)"
+
+      - name: Убедиться, что dist не попал в git
+        working-directory: .
+        run: |
+          if git ls-files --error-unmatch frontend/dist >/dev/null 2>&1; then
+            echo "::error::frontend/dist отслеживается git. Собранные файлы в репозитории приводят к тому, что рассинхрон сборки и исходников замечается поздно."
+            exit 1
+          fi
+          echo "frontend/dist вне git — как и задумано"

@@ -2,8 +2,17 @@
 <phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
          bootstrap="vendor/autoload.php"
-         colors="true">
+         colors="true"
+         failOnWarning="true"
+         failOnRisky="true"
+         failOnNotice="true"
+         beStrictAboutOutputDuringTests="true"
+>
     <testsuites>
+        <!--
+            Unit    — без Laravel и без базы. Сюда с этапа 1 переезжает вся математика.
+            Feature — приложение целиком на SQLite в памяти.
+        -->
         <testsuite name="Unit">
             <directory>tests/Unit</directory>
         </testsuite>
@@ -18,14 +27,20 @@
     </source>
     <php>
         <env name="APP_ENV" value="testing"/>
+        <env name="APP_KEY" value="base64:AckfSECXIvnK5r28GVIWUAxmbBSjTsmF/0mnaMBiJPI="/>
         <env name="APP_MAINTENANCE_DRIVER" value="file"/>
         <env name="BCRYPT_ROUNDS" value="4"/>
+        <env name="BROADCAST_CONNECTION" value="null"/>
         <env name="CACHE_STORE" value="array"/>
+        <!--
+            Тесты никогда не ходят в MySQL: набор Feature обязан выполняться
+            и в CI, где базы нет, и на машине разработчика без поднятого Compose.
+        -->
         <env name="DB_CONNECTION" value="sqlite"/>
         <env name="DB_DATABASE" value=":memory:"/>
+        <env name="DB_URL" value=""/>
         <env name="MAIL_MAILER" value="array"/>
         <env name="QUEUE_CONNECTION" value="sync"/>
         <env name="SESSION_DRIVER" value="array"/>
-        <env name="SEED_DEMO_DATA" value="false"/>
     </php>
 </phpunit>
