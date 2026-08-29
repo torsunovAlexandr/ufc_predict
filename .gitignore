@@ -1,0 +1,8 @@
+# Корневой .env создаётся командой `make env` из backend/.env
+# и содержит пароль к базе — в репозиторий не попадает.
+/.env
+
+.DS_Store
+.idea/
+.vscode/
+_to_delete/

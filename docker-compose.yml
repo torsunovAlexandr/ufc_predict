@@ -1,0 +1,95 @@
+services:
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: ufc-nginx
+    ports:
+      - "${APP_PORT:-8080}:80"
+    volumes:
+      - ./backend:/var/www/backend:cached
+      - ./frontend/dist:/var/www/frontend:cached
+      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - php
+    restart: unless-stopped
+
+  php:
+    build:
+      context: ./docker/php
+    container_name: ufc-php
+    working_dir: /var/www/backend
+    volumes:
+      - ./backend:/var/www/backend:cached
+    env_file:
+      - ./backend/.env
+    environment:
+      # Xdebug 3 читает XDEBUG_MODE в обход ini-файла. По умолчанию off —
+      # включайте командой `make debug-on` или задайте XDEBUG_MODE=debug
+      # в корневом .env, чтобы отладчик был активен постоянно.
+      XDEBUG_MODE: ${XDEBUG_MODE:-off}
+      # Подсказывает PhpStorm, какую конфигурацию сервера использовать
+      # для сопоставления путей при отладке консольных команд.
+      PHP_IDE_CONFIG: serverName=ufc-predict
+    extra_hosts:
+      # Чтобы host.docker.internal работал и на Linux, а не только
+      # в Docker Desktop.
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: unless-stopped
+
+  scheduler:
+    build:
+      context: ./docker/php
+    container_name: ufc-scheduler
+    working_dir: /var/www/backend
+    volumes:
+      - ./backend:/var/www/backend:cached
+    env_file:
+      - ./backend/.env
+    depends_on:
+      mysql:
+        condition: service_healthy
+    # Планировщик Laravel: раз в минуту проверяет расписание из routes/console.php
+    command: php artisan schedule:work
+    restart: unless-stopped
+
+  mysql:
+    image: mysql:8.4
+    container_name: ufc-mysql
+    ports:
+      # Слева — порт на вашей машине (для PhpStorm, TablePlus, mysql-клиента),
+      # справа — порт внутри docker-сети (его использует бекенд).
+      # Если 3306 уже занят локально установленным MySQL, задайте другой:
+      #   DB_PORT_EXTERNAL=33061 docker compose up -d
+      - "${DB_PORT_EXTERNAL:-3306}:3306"
+    environment:
+      MYSQL_DATABASE: ${DB_DATABASE:-ufc_predict}
+      MYSQL_USER: ${DB_USERNAME:-ufc}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-secret}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-rootsecret}
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./docker/mysql/my.cnf:/etc/mysql/conf.d/custom.cnf:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p${DB_ROOT_PASSWORD:-rootsecret}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  node:
+    image: node:22-alpine
+    container_name: ufc-node
+    working_dir: /var/www/frontend
+    volumes:
+      - ./frontend:/var/www/frontend:cached
+    ports:
+      - "${VITE_PORT:-5173}:5173"
+    # По умолчанию контейнер собирает фронтенд и завершается.
+    # Для разработки: docker compose run --rm --service-ports node npm run dev -- --host
+    command: sh -c "npm install && npm run build"
+    profiles: ["build", "dev"]
+
+volumes:
+  mysql-data:
